@@ -1,0 +1,452 @@
+---
+title: "Carbon standards"
+output:
+  word_document:
+    fig_height: 6
+    fig_width: 8
+  html_document: default
+---
+
+```{r setup, include = FALSE}
+
+knitr::opts_chunk$set(echo = FALSE)
+
+library(dplyr)
+library(ggplot2)
+library(rjags)
+library(stringr)
+
+library(mxbutils)
+
+
+# Default ggplot theme
+t <- theme_bw() +
+  theme(text = element_text(size = 20))
+
+theme_set(t)
+
+```
+
+
+
+
+```{r}
+
+# Function to make a factor for standard labels in each data set with upper-case
+# labels before lower-case labels.
+fn <- function(x) {
+  xs <- unique( as.character(x) )
+  up <- stringr::str_detect(xs, "^[A-Z]")
+  
+  factor(x, levels = c(sort(xs[up]), sort(xs[!up])))
+}
+
+
+digest <- loadFrom( mdPath("data/digest.RData") ) %>%
+  mutate(newLabel = fn(newLabel))
+
+predigest <- loadFrom( mdPath("data/predigest.RData") ) %>%
+  mutate(newLabel = fn(newLabel))
+
+```
+
+
+## Model
+
+Bayesian model to fit a t-distribution and estimate quantiles of the mean, standard deviation and shape parameter.
+
+
+```{r}
+
+fit_t <- function(x, n.iter=10000) {
+  
+  modelTxt <- "
+  model {
+  for (i in 1:N) {
+  x[i] ~ dt(mu, tau, shape)
+  }
+  
+  mu ~ dunif(0, 100)
+  tau <- 1 / (sd * sd)
+  sd ~ dunif(0.001, 100)
+  
+  shape <- shapeMinusOne + 1
+  shapeMinusOne ~ dexp(1/29)
+  }
+  "
+  
+  zz <- textConnection(modelTxt)
+  m <- jags.model(zz, 
+                  data = list(x=x, N=length(x)), 
+                  inits = list(mu = 0, sd = 1, shapeMinusOne = 29), 
+                  quiet = TRUE)
+  close(zz)
+  
+  samples <- coda.samples(m, c("mu", "sd", "shape"), n.iter=n.iter)
+  samples <- as.matrix(samples)
+  
+  probs <- c(0.025, 0.5, 0.975)
+  mu <- as.numeric(samples[, "mu"])
+  mu.q <- quantile(mu, probs=probs)
+  
+  sd <- as.numeric(samples[, "sd"])
+  sd.q <- quantile(sd, probs=probs)
+  
+  shape <- as.numeric(samples[, "shape"])
+  shape.mode <- {
+    d <- density(shape)
+    i <- which(d$y == max(d$y))[1]
+    d$x[i]
+  }
+  
+  res <- c(mean(mu), mu.q,
+           mean(sd), sd.q,
+           shape.mode)
+  
+  names(res) <- c("mu_mean", paste("mu", probs, sep="_"),
+                  "sd_mean", paste("sd", probs, sep="_"),
+                  "shape_mode")
+  
+  res
+}
+
+```
+
+
+
+## Undigested standards
+
+### Label frequencies
+
+```{r}
+
+predigest %>%
+  group_by(newLabel) %>%
+  summarize(count = n())
+
+```
+
+### Percent carbon values
+
+```{r}
+
+ggplot(predigest, aes(percentC, newLabel)) +
+  geom_point(position = position_jitter(width = 0, height = 0.15)) +
+  labs(x = "percent carbon", y = "standard")
+
+```
+
+
+### Fitted distributions
+
+Estimates for mean, standard deviation and shape parameter of t-distributions fitted 
+by Markov Chain Monte Carlo. Lower and upper bounds for the mean (mu) and standard
+deviation (sd) are for the 95% Bayesian credible interval. The mode is reported for
+the shape parameter since the posterior distribution will be highly skewed (right-tailed).
+
+
+```{r}
+
+# Fit a distribution to each standard's percent carbon values
+res <- tapply(predigest$percentC, predigest$newLabel, fit_t)
+
+m <- do.call(rbind, res)
+
+# Discard columns 1 (mu mean) and 5 (mu median)
+m <- m[, -c(1,5)]
+colnames(m) <- c("mu.lower", "mu.median", "mu.upper", 
+                 "sd.lower", "sd.median", "sd.upper",
+                 "shape.mode")
+
+df <- cbind( data.frame(label = names(res)), m)
+
+knitr::kable(df, digits = 2)
+
+```
+
+## Digested standards
+
+Note, an outlier for standard "C_kaolin" with percent carbon value of 29 has been removed.
+
+```{r}
+
+digest <- digest %>%
+  # remove outlier
+  filter(percentC < 10 ) %>%
+
+  # For the moment, ignore labels from field soil samples which have
+  # labels starting with "O_"
+  filter(!str_detect(newLabel, "^O_")) %>%
+  mutate(newLabel = droplevels(newLabel))
+
+```
+
+
+### Label frequencies
+
+```{r}
+
+digest %>%
+  group_by(newLabel) %>%
+  summarize(count = n())
+
+```
+
+### Percent carbon values
+
+```{r}
+
+ggplot(digest, aes(percentC, newLabel)) +
+  geom_point(position = position_jitter(width = 0, height = 0.15)) +
+  labs(x = "percent carbon", y = "standard")
+
+```
+
+
+### Fitted distributions
+
+Estimates for mean and standard deviation of Normal distributions fitted by Markov Chain
+Monte Carlo. Lower and upper bounds are for the 95% Bayesian credible interval.
+
+The estimate for the mean ("mu") will be very close to the mean of the sample values,
+however, the bounds of that estimate can be different to a standard confidence interval
+depending on the actual distribution of sample values.
+
+```{r}
+
+# Fit a distribution to each standard's percent carbon values
+res <- tapply(digest$percentC, digest$newLabel, fit_t)
+
+m <- do.call(rbind, res)
+
+# Discard columns 1 (mu mean) and 5 (sd mean)
+m <- m[, -c(1,5)]
+colnames(m) <- c("mu.lower", "mu.median", "mu.upper", 
+                 "sd.lower", "sd.median", "sd.upper",
+                 "shape.mode")
+
+df <- cbind( data.frame(label = names(res)), m)
+
+knitr::kable(df, digits = 2)
+
+```
+
+
+
+## Analysis of recovery rate
+
+A bounded estimate of recovery rate is calculated for those labels that are common to both the pre-digest and digest data sets.
+
+For each standard label:
+
+1. A t-distribution is fitted to the predigest values
+
+2. Digest values are then related to the predigest values by assuming that they were
+   drawn from a second t-distribution, with mean equal to the predigest mean
+   multiplied by an unknown recovery rate (in the interval [0, 1]).
+
+This model is fitted using Markov Chain Monte Carlo, with vague priors.
+
+```{r}
+
+COMMON <- predigest %>%
+  transmute(newLabel = as.character(newLabel)) %>%
+  distinct %>%
+  filter(newLabel %in% as.character(digest$newLabel)) %>%
+  arrange(newLabel)
+
+# Reduce data to recs with common labels
+suppressWarnings({
+  DAT.PRE <- inner_join(predigest, COMMON, by="newLabel")
+  DAT.DIG <- inner_join(digest, COMMON, by="newLabel")
+})
+
+```
+
+
+```{r}
+
+recoveryRateFn <- function(xpredigest, xdigest, n.iter = 10000) {
+  modelTxt <- "
+  model {
+  # fit Normal distribution to predigest values
+  for (i in 1:NPre) {
+    xpre[i] ~ dt(muPre, tauPre, shapePre)
+  }
+  
+  # estimate recovery rate of digest samples relative to
+  # fitted distribution of predigest values
+  
+  for (i in 1:NDig) {    
+    xdig[i] ~ dt(muDig, tauDig, shapeDig)
+  }
+  muDig <- recoveryRate * muPre
+  
+  muPre ~ dnorm(0, 0.0001)
+  sdPre ~ dunif(0.0, 10)
+  tauPre <- 1 / (sdPre * sdPre)
+  shapePre <- shapePreMinusOne + 1
+  shapePreMinusOne ~ dexp(1/29)
+
+  sdDig ~ dunif(0.0, 10)
+  tauDig <- 1 / (sdDig * sdDig)
+  shapeDig <- shapeDigMinusOne + 1
+  shapeDigMinusOne ~ dexp(1/29)
+  
+  recoveryRate ~ dbeta(1, 1)
+  }"
+  
+  zz <- textConnection(modelTxt)
+  model <- jags.model(zz, 
+                      data = list(xpre = xpredigest, NPre = length(xpredigest),
+                                  xdig = xdigest, NDig = length(xdigest)),
+                      inits = list(muPre = 0, sdPre = 1, shapePreMinusOne = 29,
+                                   sdDig = 1, shapeDigMinusOne = 29,
+                                   recoveryRate = 0.5),
+                      n.adapt = 1000,
+                      quiet = TRUE)
+  
+  close(zz)
+  
+  update(model, n.iter)
+  
+  samples <- coda.samples(model, 
+                          c("recoveryRate", 
+                            "muPre", "sdPre", "shapePre", 
+                            "sdDig", "shapeDig"), n.iter=n.iter)
+  
+  res <- as.data.frame( samples[[1]] )
+  
+  res
+}
+
+fitRecoveryFn <- function(theLabel) {
+  xpre <- DAT.PRE %>%
+    filter(newLabel == theLabel) %>%
+    select(percentC)
+  
+  xpre <- xpre$percentC
+  
+  xdig <- DAT.DIG %>%
+    filter(newLabel == theLabel) %>%
+    select(percentC)
+  
+  xdig <- xdig$percentC
+  
+  res <- recoveryRateFn(xpre, xdig)
+  
+  qs <- quantile(res$recoveryRate, probs=c(0.025, 0.5, 0.975))
+  mn <- mean(res$recoveryRate)
+  stats <- c(qs[1], qs[2], mn, qs[3])
+  names(stats) <- c("lower_2.5%", "median", "mean", "upper_97.5%")
+  stats
+}
+
+```
+
+Mean and quantiles for recovery rates estimated for common labels:
+
+```{r}
+
+df <- do.call("rbind", lapply(COMMON$newLabel, function(lbl) { fitRecoveryFn(lbl) }))
+rownames(df) <- COMMON$newLabel
+
+knitr::kable(df, digits = 2)
+
+```
+
+
+## Effect of kaolin on variance of digest samples
+
+```{r}
+
+sdRatioFn <- function(x, xkaolin, n.iter=10000) {
+  modelTxt <- "
+  model {
+  for (i in 1:length(x)) {
+    x[i] ~ dt(mu, tau, shape)
+  }
+  
+  for (i in 1:length(xkaolin)) {
+    xkaolin[i] ~ dt(muK, tauK, shapeK)
+  }
+
+  mu ~ dnorm(0, 0.0001)
+  muK ~ dnorm(0, 0.0001)
+  
+  sd ~ dunif(0.0, 10)
+  tau <- 1 / (sd * sd)
+  
+  shape <- shapeMinusOne + 1
+  shapeMinusOne ~ dexp(1/29)
+  
+  sdK ~ dunif(0.0, 10)
+  tauK <- 1 / (sdK * sdK)
+
+  shapeK <- shapeKMinusOne + 1
+  shapeKMinusOne ~ dexp(1/29)
+  }"
+  
+  zz <- textConnection(modelTxt)
+  model <- jags.model(zz, 
+                      data = list(x = x, xkaolin = xkaolin),
+                      inits = list(mu = 0, muK = 0, 
+                                   sd = 1, sdK = 1,
+                                   shapeMinusOne=29, shapeKMinusOne=29),
+                      n.adapt = 1000,
+                      quiet = TRUE)
+  
+  close(zz)
+  
+  update(model, n.iter)
+  
+  samples <- coda.samples(model, c("mu", "muK", "sd", "sdK"), n.iter=n.iter)
+  
+  res <- as.data.frame( samples[[1]] )
+  
+  res  
+}
+
+fitsdRatioFn <- function(kaolinLabel) {
+  dat <- digest %>%
+    filter(newLabel == kaolinLabel) %>%
+    select(percentC)
+  
+  xk <- dat$percentC
+  
+  otherLabel <- str_replace(kaolinLabel, "_kaolin", "")
+  dat <- digest %>%
+    filter(newLabel == otherLabel) %>%
+    select(percentC)
+  
+  x <- dat$percentC
+
+  res <- sdRatioFn(x, xk)
+  
+  ratio <- res$sdK / res$sd
+  
+  qs <- quantile(ratio, probs=c(0.025, 0.5, 0.975))
+  mn <- mean(ratio)
+  stats <- c(qs[1], qs[2], mn, qs[3])
+  names(stats) <- c("lower_2.5%", "median", "mean", "upper_97.5%")
+  stats
+}
+
+```
+
+Kaolin results:
+
+```{r}
+
+# Get labels where there is a kaolin variant
+lbls <- levels( digest$newLabel )
+hasK <- str_detect(lbls, "kaolin$")
+
+df <- do.call("rbind", lapply(lbls[hasK], function(lbl) { fitsdRatioFn(lbl) }))
+rownames(df) <- lbls[hasK]
+
+knitr::kable(df, digits = 2)
+
+```
+
+

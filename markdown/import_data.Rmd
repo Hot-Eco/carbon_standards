@@ -1,0 +1,143 @@
+---
+title: "Import data"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(dplyr)
+library(tibble)
+library(readxl)
+
+library(mxbutils)
+
+
+PATH <- mdPath("data_raw/standards 6.5.2015.xlsx")
+
+```
+
+### Summary
+
+Data is read from workbook "standards 6.5.2015.xlsx" into two data.frames:
+
+`predigest` (from worksheet 1: "undigested standards")
+
+`digest` (from worksheet 2: "digested standards")
+
+
+### Pre-digest data
+
+Read data, select columns and tidy names.
+
+```{r}
+
+dat <- readxl::read_excel(PATH, "undigested standards") %>%
+
+  select(wrsID = `WRS #`, standard = Standard, percentC = `%C`)
+
+```
+
+
+Tidy the labels for standards.
+
+```{r}
+
+lookup <- tribble(
+  ~standard,         ~newLabel,
+  "5% charcoal",   "charcoal_5%",
+  "1% charcoal",   "charcoal_1%",
+  "0.5% charcoal", "charcoal_0.5%",
+  "A",             "A",
+  "B",             "B",
+  "C",             "C",
+  "D",             "D",
+  "Sand",          "sand",
+  "Sand + humic 20%",     "humic_20%",
+  "Sand + sawdust  5 %",  "sawdust_5%"
+)
+
+# Add the newLabel column to the data and make sure all of
+# the standard names have been matched
+dat <- left_join(dat, lookup, by = "standard") %>%
+  select(wrsID, standard, newLabel, percentC)
+
+if (anyNA(dat$newLabel)) stop("bummer")
+
+```
+
+
+Save to file.
+
+```{r}
+
+predigest <- dat
+save(predigest, file = mdPath("data/predigest.RData"))
+
+```
+
+
+### Digest data
+
+Read data, select columns and tidy names.
+
+```{r}
+
+dat <- readxl::read_excel(PATH, "digested standards", na = "NA") %>%
+
+  select(wrsID = `WRS #`, standard = Standard, percentC = `%C`) %>%
+  
+  # discard rows with no standard label or missing measurement
+  filter(!is.na(standard), !is.na(percentC))
+
+```
+
+
+Tidy the labels for standards.
+
+```{r}
+
+lookup <- tribble(
+  ~standard,         ~newLabel,
+  "0.5% Char+Kao", "charcoal_0._5%_kaolin",
+  "0.5% charcoal", "charcoal_0._5%",
+  "0.5%Humic",     "humic_0._5%",
+  "1% Char+Kao",   "charcoal_1%_kaolin",
+  "1% charcoal",   "charcoal_1%",
+  "1% sawdust",    "sawdust_1%",
+  "5% Char+Kao",   "charcoal_5%_kaolin",
+  "5% charcoal",   "charcoal_5%",
+  "5% sawdust",    "sawdust_5%",
+  "A",             "A",
+  "A +Kao",        "A_kaolin",
+  "B",             "B",
+  "B +Kao",        "B_kaolin",
+  "C",             "C",
+  "C +Kao",        "C_kaolin",
+  "D",             "D",
+  "D +Kao",        "D_kaolin",
+  "O T5 B2F2",     "O_T5_B2F2",
+  "O T5 B2F3U",    "O_T5_B2F3U",
+  "O T5 Gosf 2F3 U", "O_T5_Gosf_2F3_U",
+  "O T5 Kuln 2F2 U", "O_T5_Kuln_2F2_U",
+  "O T5 Kuln 2F3 U", "O_T5_Kuln_2F3_U"
+)
+
+# Add the newLabel column to the data and make sure all of
+# the standard names have been matched
+dat <- left_join(dat, lookup, by = "standard") %>%
+  select(wrsID, standard, newLabel, percentC)
+
+if (anyNA(dat$newLabel)) stop("bummer")
+
+```
+
+
+Save to file.
+
+```{r}
+
+digest <- dat
+save(digest, file = mdPath("data/digest.RData"))
+
+```

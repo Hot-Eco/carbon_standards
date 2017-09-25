@@ -1,0 +1,178 @@
+---
+title: "Recovery rate for standards with kaolin"
+output:
+  word_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(dplyr)
+library(ggplot2)
+library(rjags)
+library(stringr)
+
+library(here)
+
+
+# Default ggplot theme
+theme_set(
+  theme_bw() +
+  theme(text = element_text(size = 20))
+)
+
+loadFrom <- function(file) {
+  e <- new.env()
+  load(file, envir = e)
+  
+  o <- ls(e)
+  if (length(o) == 1) get(o, envir = e)
+  else as.list(e)
+}
+
+
+set.seed(42)
+
+```
+
+## Summary
+
+There are no data for the carbon content of undigested standards of charcoal plus kaolin. In the following analysis we assume that these missing data follow the same distribution as carbon content for undigested standards without kaolin. We then impute values from this distribution and compare them to values for digested standards with kaolin to estimate recovery rate.
+
+## Data
+
+```{r}
+
+predigest <- loadFrom( here("data/predigest.RData") )
+
+digest <- loadFrom( here("data/digest.RData") )
+
+```
+
+
+
+## JAGS model code to fit distributions and estimate recovery rate
+
+```{r}
+
+modelTxt <- "
+model {
+  # undigested samples
+  for (i in 1:NPre) {
+    xpre[i] ~ dt(muPre, tauPre, shapePre)
+  }
+  
+  # digested samples
+  for (i in 1:NDig) {    
+    xdig[i] ~ dt(muDig, tauDig, shapeDig)
+  }
+
+  muDig <- recoveryRate * muPre
+  
+  muPre ~ dnorm(0, 0.0001)
+  sdPre ~ dunif(0.0, 10)
+  tauPre <- 1 / (sdPre * sdPre)
+  shapePre <- shapePreMinusOne + 1
+  shapePreMinusOne ~ dexp(1/29)
+
+  sdDig ~ dunif(0.0, 10)
+  tauDig <- 1 / (sdDig * sdDig)
+  shapeDig <- shapeDigMinusOne + 1
+  shapeDigMinusOne ~ dexp(1/29)
+  
+  recoveryRate ~ dbeta(1, 1)
+}"
+
+```
+
+
+## Function to fit model
+
+This function fits the nodel for a selected standard identified by label. It then checks the model for convergence and, if all is well, returns posterior samples as a data frame.
+
+```{r}
+
+fit_model <- function(label, n.iter = 10000) {
+  dat.undigested <- filter(predigest, newLabel == label)
+  dat.digested <- filter(digest, newLabel == paste0(label, "_kaolin"))
+  
+  zz <- textConnection(modelTxt)
+  
+  model <- jags.model(
+    file = zz,
+    
+    data = list(
+      NPre = nrow(dat.undigested),
+      xpre = dat.undigested$percentC,
+      NDig = nrow(dat.digested),
+      xdig = dat.digested$percentC),
+    
+    inits = function() {
+      list(muPre = 0, sdPre = 1, shapePreMinusOne = 29,
+           sdDig = 1, shapeDigMinusOne = 29,
+           recoveryRate = runif(1))
+    },
+    
+    n.chains = 2,
+    
+    quiet = TRUE
+  )
+  
+  close(zz)
+  
+  update(model, n.iter)
+  
+  sims <- coda.samples(model, 
+                       c("recoveryRate", 
+                         "muPre", "sdPre", "shapePre", 
+                         "sdDig", "shapeDig"), n.iter=n.iter)
+  
+  # check model convergence
+  g <- gelman.diag(sims)
+  m <- g$psrf
+  
+  if ( !all(m[, 1] - 1.0 < 0.1) )
+    stop("model did not converge for label: ", label, "\n",
+         m)
+
+  # If all is well return the results of all chains combined
+  as.data.frame( do.call(rbind, sims) )
+}
+
+```
+
+
+## Estimate recovery rate for selected standards
+
+Fit the model for each standard label, check that the model converged, then report on recovery rate.
+
+```{r}
+
+labels <- c("A", "B", "C", "D", "charcoal_1%", "charcoal_5%")
+
+fits <- lapply(labels, fit_model, n.iter = 20000)
+
+rates <- lapply(fits, 
+                function(sims) {
+                  with(sims,
+                       data.frame(
+                         lwr = quantile(recoveryRate, 0.025),
+                         mean = mean(recoveryRate),
+                         median = quantile(recoveryRate, 0.5),
+                         upr = quantile(recoveryRate, 0.975)
+                       )
+                  )
+                })
+
+rates <- do.call(rbind, rates)
+rownames(rates) <- NULL
+rates$label <- labels
+
+rates <- select(rates, label, everything())
+
+knitr::kable(rates, caption = "Estimated recovery rates", digits = 2)
+
+```
+
+

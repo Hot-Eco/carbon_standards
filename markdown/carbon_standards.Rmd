@@ -130,9 +130,28 @@ predigest %>%
 
 ```{r}
 
-ggplot(predigest, aes(percentC, newLabel)) +
-  geom_point(position = position_jitter(width = 0, height = 0.15)) +
-  labs(x = "percent carbon", y = "standard")
+# reverse order of standard levels
+dat.gg <- predigest %>%
+  mutate(revLabel = factor(newLabel, levels = rev(levels(newLabel))) )
+
+dat.means <- dat.gg %>%
+  group_by(revLabel) %>%
+  summarize(mean = mean(percentC), y = first(as.integer(revLabel)))
+
+ggplot(dat.gg, aes(percentC, revLabel)) +
+  geom_point(position = position_jitter(width = 0, height = 0.15),
+             shape = 1, size = 2, colour = "grey40") +
+  
+  geom_linerange(data = dat.means, 
+                 aes(x = mean, 
+                     ymin = y - 0.4,
+                     ymax = y + 0.4),
+                 size = 1) +
+  
+  labs(x = "percent carbon", y = "standard") +
+  
+  theme(panel.grid.major.x = element_blank(),
+        panel.grid.minor.x = element_blank())
 
 ```
 
@@ -196,9 +215,30 @@ digest %>%
 
 ```{r}
 
-ggplot(digest, aes(percentC, newLabel)) +
-  geom_point(position = position_jitter(width = 0, height = 0.15)) +
-  labs(x = "percent carbon", y = "standard")
+# reverse order of standard labels
+dat.gg <- digest %>%
+  mutate( revLabel = factor(newLabel, levels = rev(levels(newLabel))) )
+
+dat.means <- dat.gg %>%
+  group_by(revLabel) %>%
+  summarize(mean = mean(percentC), y = first(as.integer(revLabel)))
+
+
+ggplot(dat.gg, aes(percentC, revLabel)) +
+  
+  geom_point(position = position_jitter(width = 0, height = 0.15),
+             shape = 1, size = 2, colour = "grey40") +
+  
+  geom_linerange(data = dat.means, 
+                 aes(x = mean, 
+                     ymin = y - 0.4,
+                     ymax = y + 0.4),
+                 size = 1) +
+
+  labs(x = "percent carbon", y = "standard") +
+  
+  theme(panel.grid.major.x = element_blank(),
+        panel.grid.minor.x = element_blank())
 
 ```
 
